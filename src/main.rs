@@ -3,8 +3,9 @@ use reqwest::Client;
 use serde_json::{from_str, Value};
 use url::form_urlencoded;
 use std::string::String;
-use embryo::{Embryo, EmPair, EmbryoList};
+use embryo::{Embryo, EmbryoList};
 use chrono::{Duration, Local};
+use std::collections::HashMap;
 
 static SEARCH_URL: &str = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
 
@@ -40,9 +41,12 @@ async fn generate_embryo_list(json_search: String) -> Vec<Embryo> {
 
 fn extract_links_from_results(json_data: String, json_search: String) -> Vec<Embryo> {
     let mut embryo_list = Vec::new();
-    let em_search: EmPair = from_str(&json_search).expect("Erreur lors de la désérialisation JSON");
-    let search: String = form_urlencoded::byte_serialize(em_search.value.as_bytes()).collect();
+    let em_search: HashMap<String, String> = from_str(&json_search).expect("Erreur lors de la désérialisation JSON");
+    let (_key, value) = em_search.iter().next().expect("Empty map");
+    let search: String = form_urlencoded::byte_serialize(value.as_bytes()).collect();
     let parsed_json: Value = serde_json::from_str(&json_data).unwrap();
+    
+    println!("{}", search);
 
     if let Some(features) = parsed_json.get("features").and_then(|v| v.as_array()) {
         for feature in features {
@@ -52,17 +56,12 @@ fn extract_links_from_results(json_data: String, json_search: String) -> Vec<Emb
             let fromdate = feature["properties"]["fromdate"].as_str().unwrap_or("");
 
             if search.contains(name) || name.contains(&search) || search.contains(country) || country.contains(&search) || search.contains(fromdate) || fromdate.contains(&search) {
+                let mut embryo_properties = HashMap::new();
+                embryo_properties.insert("url".to_string(),url.to_string());
+                embryo_properties.insert("resume".to_string(),format!("{} : {} - from {}", name, country, fromdate));
+                println!("{:?}", embryo_properties);
                 let embryo = Embryo {
-                    properties: vec![
-                        EmPair {
-                            name: "url".to_string(),
-                            value: url.to_string(),
-                        },
-                        EmPair {
-                            name: "resume".to_string(),
-                            value: format!("{} : {} - from {}", name, country, fromdate),
-                        },
-                    ],
+                    properties: embryo_properties,
                 };
                 embryo_list.push(embryo);
             }
