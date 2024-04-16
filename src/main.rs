@@ -6,6 +6,7 @@ use std::string::String;
 use embryo::{Embryo, EmbryoList};
 use chrono::{Duration, Local};
 use std::collections::HashMap;
+use std::time::{Instant, Duration as TimeDuration};
 
 static SEARCH_URL: &str = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
 
@@ -42,14 +43,27 @@ async fn generate_embryo_list(json_search: String) -> Vec<Embryo> {
 fn extract_links_from_results(json_data: String, json_search: String) -> Vec<Embryo> {
     let mut embryo_list = Vec::new();
     let em_search: HashMap<String, String> = from_str(&json_search).expect("Erreur lors de la désérialisation JSON");
-    let (_key, value) = em_search.iter().next().expect("Empty map");
+    let value = match em_search.get("value") {
+        Some(v) => v,
+        None => "",
+    };
+    let timeout_secs : u64 = match em_search.get("timeout") {
+        Some(t) => t.parse().expect("Can't parse as u64"),
+        None => 10,
+    };
     let search: String = form_urlencoded::byte_serialize(value.as_bytes()).collect();
     let parsed_json: Value = serde_json::from_str(&json_data).unwrap();
     
     println!("{}", search);
 
     if let Some(features) = parsed_json.get("features").and_then(|v| v.as_array()) {
+        let start_time = Instant::now();
+        let timeout = TimeDuration::from_secs(timeout_secs);
+
         for feature in features {
+            if start_time.elapsed() >= timeout {
+                return embryo_list;
+            }
             let name = feature["properties"]["name"].as_str().unwrap_or("");
             let url = feature["properties"]["url"]["report"].as_str().unwrap_or("N/A");
             let country = feature["properties"]["country"].as_str().unwrap_or("");
