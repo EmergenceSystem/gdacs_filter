@@ -1,0 +1,15 @@
+{application, gdacs_filter, [
+    {description, "em_filter example for Gdacs"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {gdacs_filter_app, []}},
+    {applications, [
+        kernel,
+        stdlib,
+        em_filter
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, [{"GitHub", "https://github.com/EmergenceSystem/gdacs_filter"}]}
+]}.
