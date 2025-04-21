@@ -1,6 +1,5 @@
 -module(gdacs_filter_app).
 -behaviour(application).
--behaviour(cowboy_handler).
 
 %% Application callbacks
 -export([start/2, stop/1]).
@@ -13,9 +12,6 @@
 %% Application behavior
 start(_StartType, _StartArgs) ->
     {ok, Port} = em_filter:find_port(),
-    FilterUrl = lists:concat(["http://localhost:", integer_to_list(Port), "/query"]),
-    io:format("Filter registered: ~s~n", [FilterUrl]),
-    em_filter:register_filter(FilterUrl),
     em_filter_sup:start_link(gdacs_filter, ?MODULE, Port).
 
 stop(_State) ->

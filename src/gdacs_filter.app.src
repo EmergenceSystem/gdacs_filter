@@ -6,6 +6,8 @@
     {applications, [
         kernel,
         stdlib,
+        jsone,
+        cowboy,
         em_filter
     ]},
     {env, []},
