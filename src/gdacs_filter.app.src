@@ -8,6 +8,7 @@
         stdlib,
         jsone,
         cowboy,
+	ssl,
         em_filter
     ]},
     {env, []},

@@ -51,7 +51,7 @@ generate_embryo_list(JsonBinary) ->
     
     io:format("Search URL: ~s~n", [SearchUrl]),
     
-    case httpc:request(get, {SearchUrl, []}, [], [{body_format, binary}]) of
+    case httpc:request(get, {SearchUrl, []}, [{ssl, [{verify, verify_none}, {cacerts, public_key:cacerts_get()}]}], [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, Body}} ->
             extract_links_from_results(Body, JsonBinary);
         {error, Reason} ->
