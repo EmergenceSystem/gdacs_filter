@@ -24,6 +24,10 @@ init(Req0, State) ->
     EmbryoList = generate_embryo_list(Body),
     Response = #{embryo_list => EmbryoList},
     EncodedResponse = jsone:encode(Response),
+
+    %% Print the full JSON response right here
+    io:format("Response JSON: ~s~n", [EncodedResponse]),
+
     Req2 = cowboy_req:reply(200,
         #{<<"content-type">> => <<"application/json">>},
         EncodedResponse,
@@ -112,7 +116,6 @@ process_features([Feature | Rest], SearchValue, StartTime, Timeout, Acc) ->
                             <<"resume">> => list_to_binary(Resume)
                         }
                     },
-                    io:format("Match found: ~p~n", [Embryo]),
                     process_features(Rest, SearchValue, StartTime, Timeout, [Embryo | Acc]);
                 false ->
                     process_features(Rest, SearchValue, StartTime, Timeout, Acc)
