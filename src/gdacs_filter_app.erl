@@ -4,8 +4,8 @@
 %% Application callbacks
 -export([start/2, stop/1]).
 
-%% Cowboy handler callbacks
--export([init/2, terminate/3]).
+%% Handler callbacks
+-export([handle/1]).
 
 -define(SEARCH_URL, "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH").
 
@@ -17,26 +17,21 @@ start(_StartType, _StartArgs) ->
 stop(_State) ->
     ok.
 
-%% Cowboy handler behavior
-init(Req0, State) ->
-    {ok, Body, Req} = cowboy_req:read_body(Req0),
-    io:format("Received body: ~p~n", [Body]),
-    EmbryoList = generate_embryo_list(Body),
+%% @doc Handle incoming requests from the filter server.
+%% This function is called by em_filter_server through Wade.
+%% @param Body The request body (JSON binary or string)
+%% @return JSON response as binary or string
+handle(Body) when is_binary(Body) ->
+    handle(binary_to_list(Body));
+
+handle(Body) when is_list(Body) ->
+    io:format("Bing Filter received body: ~p~n", [Body]),
+    EmbryoList = generate_embryo_list(list_to_binary(Body)),
     Response = #{embryo_list => EmbryoList},
-    EncodedResponse = jsone:encode(Response),
+    jsone:encode(Response);
 
-    %% Print the full JSON response right here
-    io:format("Response JSON: ~s~n", [EncodedResponse]),
-
-    Req2 = cowboy_req:reply(200,
-        #{<<"content-type">> => <<"application/json">>},
-        EncodedResponse,
-        Req
-    ),
-    {ok, Req2, State}.
-
-terminate(_Reason, _Req, _State) ->
-    ok.
+handle(_) ->
+    jsone:encode(#{error => <<"Invalid request body">>}).
 
 generate_embryo_list(JsonBinary) ->
     CurrentDate = calendar:local_time(),
