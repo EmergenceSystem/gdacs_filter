@@ -1,31 +1,64 @@
 %%%-------------------------------------------------------------------
-%%% @doc GDACS disaster alert filter.
+%%% @doc GDACS disaster alert agent.
 %%%
-%%% Fetches orange/red alerts from the GDACS API for the last 7 days
-%%% and returns matching events as embryo maps.
+%%% As an agent this module:
+%%%   - Announces capabilities to em_disco on startup via `agent_hello'.
+%%%   - Maintains a memory of event URLs already returned, so
+%%%     duplicate alerts across successive queries are filtered out.
+%%%
+%%% Handler contract: `handle/2' (Body, Memory) -> {RawList, NewMemory}.
+%%% Returns a raw Erlang list — em_filter_server encodes it.
+%%% Memory schema: `#{seen => #{binary_url => true}}'.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdacs_filter_app).
 -behaviour(application).
 
 -export([start/2, stop/1]).
--export([handle/1]).
+-export([handle/1, handle/2]).
 
 -define(SEARCH_URL,
     "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH").
+
+-define(CAPABILITIES, [
+    <<"gdacs">>,
+    <<"disasters">>,
+    <<"alerts">>,
+    <<"realtime">>,
+    <<"geopolitics">>
+]).
 
 %%====================================================================
 %% Application behaviour
 %%====================================================================
 
 start(_StartType, _StartArgs) ->
-    em_filter:start_filter(gdacs_filter, ?MODULE).
+    em_filter:start_agent(gdacs_filter, ?MODULE, #{
+        capabilities => ?CAPABILITIES,
+        memory       => ets
+    }).
 
 stop(_State) ->
     em_filter:stop_filter(gdacs_filter).
 
 %%====================================================================
-%% Filter handler — returns a list of embryo maps
+%% Agent handler — with memory (primary path)
+%%====================================================================
+
+handle(Body, Memory) when is_binary(Body) ->
+    Seen    = maps:get(seen, Memory, #{}),
+    Embryos = generate_embryo_list(Body),
+    Fresh   = [E || E <- Embryos, not maps:is_key(url_of(E), Seen)],
+    NewSeen = lists:foldl(fun(E, Acc) ->
+        Acc#{url_of(E) => true}
+    end, Seen, Fresh),
+    {Fresh, Memory#{seen => NewSeen}};
+
+handle(_Body, Memory) ->
+    {[], Memory}.
+
+%%====================================================================
+%% Plain filter handler — backward compatibility
 %%====================================================================
 
 handle(Body) when is_binary(Body) ->
@@ -34,7 +67,7 @@ handle(_) ->
     [].
 
 %%====================================================================
-%% Search and processing
+%% Search and processing (unchanged)
 %%====================================================================
 
 generate_embryo_list(JsonBinary) ->
@@ -42,7 +75,8 @@ generate_embryo_list(JsonBinary) ->
     SearchUrl        = build_search_url(),
     SslOpts          = [{ssl, [{verify, verify_none},
                                {cacerts, public_key:cacerts_get()}]}],
-    case httpc:request(get, {SearchUrl, []}, SslOpts, [{body_format, binary}]) of
+    case httpc:request(get, {SearchUrl, [{"User-Agent", "Mozilla/5.0"}]},
+                       SslOpts, [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, Body}} ->
             parse_events(Body, Value, Timeout);
         _ ->
@@ -65,21 +99,16 @@ extract_params(JsonBinary) ->
         _:_ -> {binary_to_list(JsonBinary), 10}
     end.
 
-%% Builds the GDACS URL for the last 7 days, orange and red alerts.
 build_search_url() ->
     {{Year, Month, Day}, _} = calendar:local_time(),
-    Today   = fmt("~4..0w-~2..0w-~2..0w", [Year, Month, Day]),
+    Today    = fmt("~4..0w-~2..0w-~2..0w", [Year, Month, Day]),
     {SY, SM, SD} = calendar:gregorian_days_to_date(
         calendar:date_to_gregorian_days({Year, Month, Day}) - 7),
     SevenAgo = fmt("~4..0w-~2..0w-~2..0w", [SY, SM, SD]),
     lists:concat([?SEARCH_URL,
                   "?fromDate=", SevenAgo,
                   "&toDate=",   Today,
-                  "&alertlevel=orange;red&eventlist=&country="]).
-
-%%--------------------------------------------------------------------
-%% Event parsing
-%%--------------------------------------------------------------------
+                  "&alertlevel=orange%3Bred&eventlist=&country="]).
 
 parse_events(JsonData, SearchValue, TimeoutSecs) ->
     try json:decode(JsonData) of
@@ -107,9 +136,9 @@ process_features([Feature | Rest], Value, Start, Timeout, Acc) ->
 
 process_feature(Feature, SearchValue) ->
     Props    = maps:get(<<"properties">>, Feature, #{}),
-    Name     = binary_to_list(maps:get(<<"name">>,    Props, <<"">>)),
-    Country  = binary_to_list(maps:get(<<"country">>, Props, <<"">>)),
-    FromDate = binary_to_list(maps:get(<<"fromdate">>,Props, <<"">>)),
+    Name     = binary_to_list(maps:get(<<"name">>,     Props, <<"">>)),
+    Country  = binary_to_list(maps:get(<<"country">>,  Props, <<"">>)),
+    FromDate = binary_to_list(maps:get(<<"fromdate">>, Props, <<"">>)),
     UrlMap   = maps:get(<<"url">>, Props, #{}),
     Url      = maps:get(<<"report">>, UrlMap, <<"N/A">>),
     case contains_any(SearchValue, [Name, Country, FromDate]) of
@@ -126,7 +155,6 @@ process_feature(Feature, SearchValue) ->
             skip
     end.
 
-%% Returns true if SearchValue overlaps with any of the target strings.
 contains_any(SearchValue, Targets) ->
     Low = string:to_lower(SearchValue),
     lists:any(fun(T) ->
@@ -135,3 +163,11 @@ contains_any(SearchValue, Targets) ->
     end, Targets).
 
 fmt(F, A) -> lists:flatten(io_lib:format(F, A)).
+
+%%====================================================================
+%% Internal helpers
+%%====================================================================
+
+-spec url_of(map()) -> binary().
+url_of(#{<<"properties">> := #{<<"url">> := Url}}) -> Url;
+url_of(_) -> <<>>.
