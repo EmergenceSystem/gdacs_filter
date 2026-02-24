@@ -1,13 +1,11 @@
 %%%-------------------------------------------------------------------
 %%% @doc GDACS disaster alert agent.
 %%%
-%%% As an agent this module:
-%%%   - Announces capabilities to em_disco on startup via `agent_hello'.
-%%%   - Maintains a memory of event URLs already returned, so
-%%%     duplicate alerts across successive queries are filtered out.
+%%% Announces capabilities to em_disco on startup and maintains a
+%%% memory of event URLs already returned so duplicate alerts across
+%%% successive queries are filtered out.
 %%%
 %%% Handler contract: `handle/2' (Body, Memory) -> {RawList, NewMemory}.
-%%% Returns a raw Erlang list — em_filter_server encodes it.
 %%% Memory schema: `#{seen => #{binary_url => true}}'.
 %%% @end
 %%%-------------------------------------------------------------------
@@ -15,7 +13,7 @@
 -behaviour(application).
 
 -export([start/2, stop/1]).
--export([handle/1, handle/2]).
+-export([handle/2]).
 
 -define(SEARCH_URL,
     "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH").
@@ -39,10 +37,10 @@ start(_StartType, _StartArgs) ->
     }).
 
 stop(_State) ->
-    em_filter:stop_filter(gdacs_filter).
+    em_filter:stop_agent(gdacs_filter).
 
 %%====================================================================
-%% Agent handler — with memory (primary path)
+%% Agent handler
 %%====================================================================
 
 handle(Body, Memory) when is_binary(Body) ->
@@ -58,28 +56,23 @@ handle(_Body, Memory) ->
     {[], Memory}.
 
 %%====================================================================
-%% Plain filter handler — backward compatibility
-%%====================================================================
-
-handle(Body) when is_binary(Body) ->
-    generate_embryo_list(Body);
-handle(_) ->
-    [].
-
-%%====================================================================
-%% Search and processing (unchanged)
+%% Search and processing
 %%====================================================================
 
 generate_embryo_list(JsonBinary) ->
     {Value, Timeout} = extract_params(JsonBinary),
-    SearchUrl        = build_search_url(),
-    SslOpts          = [{ssl, [{verify, verify_none},
-                               {cacerts, public_key:cacerts_get()}]}],
+    SearchUrl = build_search_url(),
+    SslOpts = [{ssl, [{verify, verify_none},
+                      {cacerts, public_key:cacerts_get()}]}],
     case httpc:request(get, {SearchUrl, [{"User-Agent", "Mozilla/5.0"}]},
                        SslOpts, [{body_format, binary}]) of
         {ok, {{_, 200, _}, _, Body}} ->
             parse_events(Body, Value, Timeout);
-        _ ->
+        {ok, {{_, Status, Reason}, _, _}} ->
+            io:format("[gdacs] HTTP error: ~p ~p~n", [Status, Reason]),
+            [];
+        {error, Reason} ->
+            io:format("[gdacs] request failed: ~p~n", [Reason]),
             []
     end.
 
@@ -135,13 +128,17 @@ process_features([Feature | Rest], Value, Start, Timeout, Acc) ->
     end.
 
 process_feature(Feature, SearchValue) ->
-    Props    = maps:get(<<"properties">>, Feature, #{}),
-    Name     = binary_to_list(maps:get(<<"name">>,     Props, <<"">>)),
-    Country  = binary_to_list(maps:get(<<"country">>,  Props, <<"">>)),
-    FromDate = binary_to_list(maps:get(<<"fromdate">>, Props, <<"">>)),
-    UrlMap   = maps:get(<<"url">>, Props, #{}),
-    Url      = maps:get(<<"report">>, UrlMap, <<"N/A">>),
-    case contains_any(SearchValue, [Name, Country, FromDate]) of
+    Props       = maps:get(<<"properties">>, Feature, #{}),
+    Name        = binary_to_list(maps:get(<<"name">>,        Props, <<"">>)),
+    Country     = binary_to_list(maps:get(<<"country">>,     Props, <<"">>)),
+    FromDate    = binary_to_list(maps:get(<<"fromdate">>,     Props, <<"">>)),
+    EventType   = binary_to_list(maps:get(<<"eventtype">>,   Props, <<"">>)),
+    AlertLevel  = binary_to_list(maps:get(<<"alertlevel">>,  Props, <<"">>)),
+    Description = binary_to_list(maps:get(<<"description">>, Props, <<"">>)),
+    UrlMap      = maps:get(<<"url">>, Props, #{}),
+    Url         = maps:get(<<"report">>, UrlMap, <<"N/A">>),
+    Targets     = [Name, Country, FromDate, EventType, AlertLevel, Description],
+    case contains_any(SearchValue, Targets) of
         true ->
             Resume = list_to_binary(
                 lists:concat([Name, " : ", Country, " - from ", FromDate])),
@@ -155,18 +152,17 @@ process_feature(Feature, SearchValue) ->
             skip
     end.
 
+%% Empty value = no filter, return everything.
+%% Otherwise check if value appears in any target field.
+contains_any("", _Targets) ->
+    true;
 contains_any(SearchValue, Targets) ->
     Low = string:to_lower(SearchValue),
     lists:any(fun(T) ->
-        LowT = string:to_lower(T),
-        string:str(Low, LowT) > 0 orelse string:str(LowT, Low) > 0
+        string:str(string:to_lower(T), Low) > 0
     end, Targets).
 
 fmt(F, A) -> lists:flatten(io_lib:format(F, A)).
-
-%%====================================================================
-%% Internal helpers
-%%====================================================================
 
 -spec url_of(map()) -> binary().
 url_of(#{<<"properties">> := #{<<"url">> := Url}}) -> Url;
